@@ -42,6 +42,16 @@ export class SumologicQuerier {
     this.recordCount = 0;
   }
 
+  handleError(err, message, observer) {
+    const error = {
+      message: message,
+      status: err ? err.status : '',
+      statusText: err ? err.statusText : '',
+    };
+    observer.error(error);
+    throw error;
+  }
+
   getResultObservable() {
     const startTime = new Date();
     let isGatheringDone = false;
@@ -75,25 +85,31 @@ export class SumologicQuerier {
           continue;
         }
         if (i === this.createJobRetryCount) {
-          throw { job_id: job.data.id, message: 'max retries exceeded' };
+          this.handleError(null, 'Max retries exceeded', observer);
         }
 
-        while (!this.isTimmeout(job, startTime) && !isGatheringDone) {
+        while (!this.isTimmeout(job, startTime, observer) && !isGatheringDone) {
           // get job status
           let i;
-          for (i = 0; !this.isTimmeout(job, startTime) && i < this.getJobStatusRetryCount; i++) {
+
+          for (i = 0; !this.isTimmeout(job, startTime, observer) && i < this.getJobStatusRetryCount; i++) {
             try {
               this.status = await this.getSearchJobStatus(job.data.id);
 
               if (this.status.data.pendingErrors.length > 0 || this.status.data.pendingWarnings.length > 0) {
                 let message = '';
                 if (this.status.data.pendingErrors.length > 0) {
-                  message += 'Error:\n' + this.status.data.pendingErrors.join('\n') + '\n';
+                  // if there is an error from sumo, surface it, caught below for observer notification
+                  throw Error(this.status.data.pendingErrors.join('\n'));
                 }
                 if (this.status.data.pendingWarnings.length > 0) {
                   message += 'Warning:\n' + this.status.data.pendingWarnings.join('\n');
                 }
-                console.error(message);
+
+                if (message) {
+                  console.error(message);
+                }
+
                 if (
                   this.status.data.pendingWarnings[0] !==
                   'Messages may have been omitted from your results due to a regex that performs poorly against your data.'
@@ -126,15 +142,15 @@ export class SumologicQuerier {
                 await this.delay(this.calculateRetryWait(1000, i));
                 continue;
               } else {
-                console.error(err);
                 this.deleteSearchJob(job.data.id);
-                throw err;
+                this.handleError(err, err.message, observer);
               }
             }
           }
+
           if (i === this.getJobStatusRetryCount) {
             this.deleteSearchJob(job.data.id);
-            throw { job_id: job.data.id, message: 'max retries exceeded' };
+            this.handleError(null, 'Max retries exceeded', observer);
           }
 
           // get results
@@ -184,13 +200,13 @@ export class SumologicQuerier {
               } else {
                 console.error(err);
                 this.deleteSearchJob(job.data.id);
-                throw err;
+                this.handleError(err, err.message, observer);
               }
             }
           }
           if (i === this.getResultsRetryCount) {
             this.deleteSearchJob(job.data.id);
-            throw { job_id: job.data.id, message: 'max retries exceeded' };
+            this.handleError(null, 'Max retries exceeded', observer);
           }
         }
       })();
@@ -293,12 +309,12 @@ export class SumologicQuerier {
     return initialWait * Math.min(10, Math.pow(2, retryCount)) + Math.floor(Math.random() * 1000);
   }
 
-  isTimmeout(job, startTime) {
+  isTimmeout(job, startTime, observer) {
     const now = new Date();
     if (now.valueOf() - startTime.valueOf() > this.timeoutSec * 1000) {
       console.error('timeout');
       this.deleteSearchJob(job.data.id);
-      throw { job_id: job.data.id, message: 'timeout' };
+      this.handleError(null, 'Timeout', observer);
     }
     return false;
   }

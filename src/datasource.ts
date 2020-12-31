@@ -1,12 +1,13 @@
 import { SumologicQuerier } from './querier';
 import { Observable, merge, of } from 'rxjs';
-import { scan, map } from 'rxjs/operators';
+import { scan, map, catchError } from 'rxjs/operators';
 import {
   DataSourceApi,
   DataSourceInstanceSettings,
   DataQueryRequest,
   DataQueryResponse,
   MetricFindValue,
+  DataQueryError,
 } from '@grafana/data';
 import { LoadingState, toDataFrame, FieldType, MutableDataFrame } from '@grafana/data';
 import { getBackendSrv, getTemplateSrv } from '@grafana/runtime';
@@ -123,6 +124,14 @@ export class DataSource extends DataSourceApi<SumologicQuery, SumologicOptions> 
           }
         }
         return this.logQueryObservable(params, target.format).pipe(
+          catchError((err: any) => {
+            const error: DataQueryError = {
+              message: err.message,
+              status: err.status,
+              statusText: err.statusText,
+            };
+            throw error;
+          }),
           scan((acc: any, one: any) => {
             acc.fields = one.fields;
             if (one.records) {
@@ -302,6 +311,14 @@ export class DataSource extends DataSourceApi<SumologicQuery, SumologicOptions> 
       return querier
         .getResultObservable()
         .pipe(
+          catchError((err: any) => {
+            const error: DataQueryError = {
+              message: err.message,
+              status: err.status,
+              statusText: err.statusText,
+            };
+            throw error;
+          }),
           scan((acc: any, one: any) => {
             acc.fields = one.fields;
             if (one.records) {
